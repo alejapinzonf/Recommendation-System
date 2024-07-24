@@ -1,0 +1,104 @@
+import cv2
+import time
+import numpy as np
+from ultralytics import YOLO
+
+
+
+def calculate_distance(box1, box2):
+    center1 = ((box1[0] + box1[2]) / 2, (box1[1] + box1[3]) / 2)
+    center2 = ((box2[0] + box2[2]) / 2, (box2[1] + box2[3]) / 2)
+    distance = np.sqrt((center1[0] - center2[0])**2 + (center1[1] - center2[1])**2)
+    return distance, center1, center2
+
+def is_within_box(point, box):
+    return box[0] <= point[0] <= box[2] and box[1] <= point[1] <= box[3]
+
+model = YOLO('/home/aleja/tesis/noc/12072024/runs/segment/attemp1/exp/weights/best.pt')
+path = '/home/aleja/tesis/noc/video/try.mp4'
+cap = cv2.VideoCapture(path)
+if not cap.isOpened():
+    print("Erroro con el video")
+    exit()
+
+width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+output_videoseg = 'result.mp4'
+out = cv2.VideoWriter(output_videoseg, cv2.VideoWriter_fourcc(*'mp4v'), 30, (width, height))
+
+distance_threshold = 200
+waiting_time = 5
+detected_objects = {}
+
+while cap.isOpened():
+    ret, frame = cap.read()
+    if not ret:
+        break
+
+    results = model(frame)
+    annotated_frame = results[0].plot()
+    boxes = results[0].boxes.xyxy.cpu().numpy() # x1, y1, x2, y2
+    classes = results[0].boxes.cls.cpu().numpy()  
+    cicloruta_boxes = [box for box, cls in zip(boxes, classes) if cls == 3]
+
+    print(f'Detected {len(boxes)} objects')  
+    for box, cls in zip(boxes, classes):
+        if cls != 3:  
+            for cicloruta_box in cicloruta_boxes:
+                distance, center1, center2 = calculate_distance(box, cicloruta_box)
+                #ref = center1, center2 / distance
+                print(f'Object class {cls}, Distance: {distance}')  
+                cv2.line(annotated_frame, (int(center1[0]), int(center1[1])), (int(center2[0]), int(center2[1])), (255, 0, 0), 2)
+                cv2.putText(annotated_frame, f'{distance:.2f}', (int(center1[0]), int(center1[1]) - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+                if distance < distance_threshold:
+                    current_time = time.time()
+                    object_id = (tuple(box), cls)
+
+                    if object_id in detected_objects:
+                        last_recommendation_time = detected_objects[object_id]
+                        #time=last_recommendation_time-waiting time
+                        if current_time - last_recommendation_time < waiting_time:
+                            continue
+                    position = "izquierda" if center1[0] < center2[0] else "derecha"
+                    recommendation = None
+                    if cls == 0:  
+                        if is_within_box(center1, cicloruta_box):
+                            recommendation = "Bolardo detectado dentro de la cicloruta, mantener el curso."
+                        else:
+                            recommendation = f"Bolardo detectado al {position} de la cicloruta"
+                    elif cls == 1:  
+                        recommendation = f"Charco detectado a la {position}"
+                    elif cls == 2:  
+                        #distancia segura
+                        recommendation = f"Ciclista detectado a la {position}"
+                    elif cls == 4: 
+                        #aqiu tendrua q agregar lo del si hay peaton o no 
+                        recommendation = f"Cruce detectado a la {position}"
+                    elif cls == 5: 
+                        recommendation = f"Desnivel detectado a la {position}"
+                    elif cls == 6: 
+                        recommendation = f"Hueco detectado a la {position}"
+                    elif cls == 7:  
+                        recommendation = f"Motociclista detectado a la {position}"
+                    elif cls == 8: 
+                        #Simplemente bajar la vel  
+                        recommendation = f"Señal de PARE detectada a la {position}"
+                    elif cls == 9:  
+                        recommendation = f"Peatón detectado a la {position}"
+                    elif cls == 10:  
+                        recommendation = f"Poste detectado a la {position}"
+                    elif cls == 11:  
+                        #agregarle si esta detenido o no... pa indicar lo del cruce
+                        recommendation = f"Vehículo detectado a la {position}"
+                    if recommendation:
+                        print(recommendation)
+                    detected_objects[object_id] = current_time
+
+    cv2.imshow('result', annotated_frame)
+    out.write(annotated_frame)
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+cap.release()
+out.release()
+cv2.destroyAllWindows()
